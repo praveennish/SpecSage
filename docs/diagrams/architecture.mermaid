@@ -1,0 +1,79 @@
+%% SpecSage — target architecture
+%% Regenerate to match reality at the end of every milestone.
+%% Solid = built. Dashed = planned.
+
+flowchart TB
+    subgraph client["Clients"]
+        browser["Browser<br/>(M10 chat UI)"]
+        mcp["Claude Code / Desktop<br/>via MCP (M8)"]
+    end
+
+    subgraph edge["Edge — persistent, $0 idle"]
+        cf["CloudFront<br/>free AWS-managed TLS"]
+        paused["S3: 'demo paused' page"]
+    end
+
+    subgraph compute["Compute — destroyed between sessions"]
+        lambda["Lambda (container)<br/>FastAPI<br/>/health /search /trace<br/>/hybrid_search /answer"]
+        subgraph batch["Step Functions — batch"]
+            f1["Fargate: ingest (M1)"]
+            f2["Fargate: parse+chunk (M2)"]
+            f3["Fargate: embed (M3)"]
+            f4["Fargate: graph (M4)"]
+            f5["Fargate: eval (M7)"]
+        end
+    end
+
+    subgraph data["Data — never destroyed"]
+        s3raw[("S3 raw/")]
+        s3proc[("S3 processed/")]
+        s3snap[("S3 snapshots/")]
+        s3eval[("S3 eval site")]
+        ecr[("ECR")]
+    end
+
+    subgraph external["Managed services — free tier"]
+        qdrant[("Qdrant Cloud<br/>vectors")]
+        neo4j[("Neo4j AuraDB<br/>reference graph")]
+    end
+
+    subgraph models["Models"]
+        titan["Bedrock: Titan v2<br/>embeddings"]
+        haiku["Bedrock: Haiku 4.5<br/>extraction, judge"]
+        sonnet["Bedrock: Sonnet 5<br/>teacher synthesis"]
+        student["Modal: Qwen2.5-7B<br/>QLoRA student (M9)"]
+    end
+
+    browser --> cf
+    mcp --> cf
+    cf --> lambda
+    cf -.->|origin down| paused
+
+    lambda --> qdrant
+    lambda --> neo4j
+    lambda --> sonnet
+    lambda -.->|cascade: try first| student
+    student -.->|low confidence or<br/>failed citation check| sonnet
+
+    f1 --> s3raw
+    s3raw --> f2 --> s3proc
+    s3proc --> f3 --> qdrant
+    f3 --> titan
+    s3proc --> f4 --> neo4j
+    f4 --> haiku
+    f5 --> lambda
+    f5 --> haiku
+    f5 --> s3eval
+
+    qdrant -.->|make down: snapshot| s3snap
+    neo4j -.->|make down: export| s3snap
+    s3snap -.->|make up: restore| qdrant
+    s3snap -.->|make up: restore| neo4j
+
+    ecr --> lambda
+    ecr --> batch
+
+    classDef built fill:#2d6a4f,stroke:#1b4332,color:#fff
+    classDef planned fill:#495057,stroke:#212529,color:#fff
+    class cf,lambda,ecr built
+    class f1,f2,f3,f4,f5,qdrant,neo4j,titan,haiku,sonnet,student,browser,mcp,s3raw,s3proc,s3snap,s3eval,paused planned

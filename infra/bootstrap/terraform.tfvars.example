@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+aws_account_id     = "941500193593"
+aws_region         = "us-east-1"
+aws_profile        = "specsage"
+github_repository  = "praveennish/SpecSage"
+budget_alert_email = "you@example.com" # your address — kept out of git in case this repo goes public
+monthly_budget_usd = 10
+
+# Set false if an OIDC provider for token.actions.githubusercontent.com already exists in
+# this account — AWS allows only one per URL, and a second create attempt fails with
+# EntityAlreadyExists. Check with:
+#   aws iam list-open-id-connect-providers --profile specsage
+create_oidc_provider = true

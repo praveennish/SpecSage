@@ -1,0 +1,53 @@
+<!doctype html>
+<!--
+  Served by CloudFront as a custom error response when the origin is absent — i.e. between
+  `make down` and the next `make up`. Reused at M10 as the cost-circuit-breaker page, which is
+  why it exists this early: build the mechanism once.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SpecSage — paused</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; min-height: 100vh;
+        display: grid; place-items: center;
+        font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        background: #fbfbfa; color: #1a1a19;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #16161a; color: #e8e8e6; }
+        .muted { color: #9a9a97 !important; }
+        code { background: #26262b !important; }
+      }
+      main { max-width: 34rem; padding: 2rem; }
+      h1 { font-size: 1.4rem; margin: 0 0 .75rem; letter-spacing: -0.01em; }
+      p { margin: 0 0 1rem; }
+      .muted { color: #6b6b68; font-size: .9rem; }
+      code {
+        background: #ececea; padding: .15em .4em; border-radius: 4px;
+        font: .85em ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>SpecSage is paused</h1>
+      <p>
+        This demo runs on demand rather than continuously — the compute layer is torn down
+        between sessions so it costs nothing while idle. The corpus, vector index, and
+        reference graph are all still there.
+      </p>
+      <p class="muted">
+        Bringing it back up takes about two minutes (<code>make up</code>). If you were sent
+        here for a demo, ping me and I'll start it.
+      </p>
+      <p class="muted">
+        Informational only. Not affiliated with or endorsed by Arm. Answers are generated from
+        open documentation — verify against official specifications.
+      </p>
+    </main>
+  </body>
+</html>

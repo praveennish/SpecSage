@@ -1,0 +1,92 @@
+[project]
+name = "specsage"
+version = "0.1.0"
+description = "Agentic RAG + knowledge graph over openly-licensed computer-architecture documentation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "pre-commit>=4.0",
+    "import-linter>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "service",
+    "ingestion",
+    "embedding",
+    "graph",
+    "retrieval",
+    "agents",
+    "eval",
+    "mcp_server",
+    "finetune",
+]
+
+# --------------------------------------------------------------------------- ruff
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle, pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "SIM",           # simplify
+    "RUF",           # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+# --------------------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "unit: fast, no network, no cloud (default)",
+    "integration: requires live third-party services",
+    "smoke: runs against a deployed environment",
+]
+
+[tool.coverage.run]
+source = ["service"]
+omit = ["*/tests/*"]
+
+# --------------------------------------------------------------------------- import-linter
+# Enforces the boundary from DECISION-LOG D-002: `retrieval` is a plain library that any
+# orchestrator can call. If this contract breaks, the swappability claim is a lie.
+
+[tool.importlinter]
+root_packages = [
+    "service", "ingestion", "embedding", "graph",
+    "retrieval", "agents", "eval", "mcp_server", "finetune",
+]
+# Required because the contract below forbids external packages (langgraph, langchain),
+# not just first-party ones.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "retrieval must not depend on any agent framework"
+type = "forbidden"
+source_modules = ["retrieval"]
+forbidden_modules = ["agents", "langgraph", "langchain"]

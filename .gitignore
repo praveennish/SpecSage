@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# Environment / secrets — never commit credentials, and never commit a file that might hold them
+.env
+.env.local
+.env.*.local
+*.pem
+credentials
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+# Plan files hold resolved variable values and full resource attributes. `*.tfplan` misses
+# the conventional bare `tfplan` name produced by `terraform plan -out=tfplan`.
+*.tfplan
+tfplan
+tfplan.*
+crash.log
+terraform.tfvars
+!terraform.tfvars.example
+
+# Corpus and artifacts — these live in S3, not git. The one exception is eval/golden_qa.jsonl,
+# which is hand-curated, irreproducible, and therefore belongs in version control.
+#
+# LEADING SLASHES ARE LOAD-BEARING. An unanchored `data/` matches at any depth and silently
+# swallowed the whole `infra/data/` Terraform layer out of the first commit. Anchor anything
+# that names a common word.
+/data/
+*.pdf
+!tests/fixtures/**/*.pdf
+/processed/
+/snapshots/
+*.safetensors
+*.gguf
+
+# Arm Architecture Reference Manual — licensed for personal/development use only.
+# Never committed, never in a public bucket. See docs/PROVENANCE.md §3.
+arm-arm/
+**/DDI*.pdf
+
+# Tooling
+.DS_Store
+.idea/
+.vscode/
+!.vscode/extensions.json
