@@ -577,7 +577,7 @@ preserved intact under D-020.
   |---|---|---|
   | Graph extraction, LLM-as-judge | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | ✅ invoked |
   | Embeddings | `amazon.titan-embed-text-v2:0` | ✅ invoked, 1024 dims |
-  | Teacher synthesis | `us.anthropic.claude-sonnet-5` | ❌ access not yet granted |
+  | Teacher synthesis | `us.anthropic.claude-sonnet-4-6` | ✅ invoked |
 
 - **Finding 1 — Claude models require a cross-region inference profile, not the bare model
   ID.** The bare `anthropic.claude-haiku-4-5-…` is rejected for on-demand throughput; the

@@ -136,7 +136,25 @@ resource "aws_cloudfront_distribution" "main" {
     # domain was registered — ACM will not issue for an ALB's or Function URL's own hostname,
     # but CloudFront terminates TLS on a domain AWS owns. See D-010.
     cloudfront_default_certificate = true
-    minimum_protocol_version       = "TLSv1.2_2021"
+
+    # minimum_protocol_version is DELIBERATELY OMITTED.
+    #
+    # With the default certificate, CloudFront ignores it and pins the reported value to
+    # "TLSv1". Setting "TLSv1.2_2021" produced a PERPETUAL DIFF: every plan showed
+    # `~ minimum_protocol_version = "TLSv1" -> "TLSv1.2_2021"` and every apply silently
+    # failed to change it. That is worse than it sounds — a plan that never comes back clean
+    # cannot be used as a drift check, and it trains you to skim plan output.
+    #
+    # The security posture is fine regardless. Verified empirically against the live
+    # distribution on 2026-08-08:
+    #     TLS 1.0 -> connection refused
+    #     TLS 1.2 -> 200
+    #     TLS 1.3 -> 200
+    # AWS has deprecated TLS 1.0/1.1 on *.cloudfront.net, so the reported "TLSv1" is a
+    # nominal value, not what is negotiated.
+    #
+    # Enforcing an explicit minimum requires a custom domain + ACM certificate. That is a
+    # real, documented cost of D-010/D-011 (no domain registered) and is revisited at M10.
   }
 }
 

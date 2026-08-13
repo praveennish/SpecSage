@@ -693,6 +693,21 @@ can be created. Blunt, effective, and easily reversed.
 | `ResourceNotFoundException` naming a model | Wrong model ID form | Bedrock IDs carry an `anthropic.` prefix; see [D-028](./DECISION-LOG.md#d-028--bedrock-access-via-anthropicbedrockmantle-model-ids-verified) |
 | `lint-imports` fails | Something imported an agent framework into `retrieval` | Move it to `agents/`. The contract is deliberate ([D-002](./DECISION-LOG.md#d-002--orchestration-langgraph-behind-a-framework-agnostic-agenttool-interface)). |
 
+### Git
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| A whole directory is missing from a commit, no error shown | An **unanchored** `.gitignore` pattern matches at any depth. `data/` silently excluded `infra/data/` — the entire CloudFront + S3 layer — from the first push. | Anchor patterns that use common words: `/data/`, not `data/`. Audit with `git check-ignore -v <path>`. |
+| `terraform plan -out=tfplan` file gets committed | `.gitignore` has `*.tfplan`, but Terraform's conventional output is the **extensionless** `tfplan` | Ignore both `*.tfplan` and `tfplan` |
+| `git status` shows `## main` with no `...origin/main` | Upstream tracking lost — usually after `git branch -m` during a history rewrite | `git branch --set-upstream-to=origin/main main` |
+| Secret removed but still readable | Deleting a value in a later commit does not remove it from history | Rewrite history while it is cheap. For a root commit, `git reset --soft <sha>~1` fails — use `git checkout --orphan` instead. |
+
+> **Verifying a push needs two different questions.** "Is anything bad included?" is answered
+> by scanning `git rev-list --all`. "Is anything good missing?" cannot be answered from git at
+> all — nothing in a repo records what *should* be there. You have to enumerate the filesystem
+> and ask git about each file. The first push here passed the security scan and still lost six
+> Terraform files.
+
 ### CI/CD
 
 | Symptom | Cause | Fix |

@@ -1,0 +1,12 @@
+# cp terraform.tfvars.example terraform.tfvars
+# terraform.tfvars is gitignored.
+
+aws_account_id = "941500193593"
+aws_region     = "us-east-1"
+aws_profile    = "specsage"
+
+# Git SHA of the image in ECR. No default on purpose — this is the one input that answers
+# "which commit is running in production", and it should never be implicit.
+#
+#   image_tag = "$(git rev-parse --short HEAD)"
+image_tag = "7f808fd"
