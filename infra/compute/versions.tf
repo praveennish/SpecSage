@@ -12,8 +12,16 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.80"
+      source = "hashicorp/aws"
+      # 6.x required for aws_lambda_permission.invoked_via_function_url.
+      #
+      # Since October 2025 a Function URL with auth NONE needs TWO resource-policy statements:
+      # lambda:InvokeFunctionUrl AND lambda:InvokeFunction conditioned on
+      # lambda:InvokedViaFunctionUrl. Provider 5.x can only express the first, so a URL built
+      # with it returns 403 with a policy that looks correct. Expressing the condition needs
+      # 6.x; without it the only alternative is granting InvokeFunction to "*" unconditionally,
+      # which would let any principal invoke the function directly, bypassing the URL.
+      version = "~> 6.0"
     }
   }
 

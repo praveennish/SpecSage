@@ -87,6 +87,39 @@ resource "aws_lambda_function_url" "api" {
 }
 
 # ----------------------------------------------------------------------------
+# Resource-based policy for the Function URL — BOTH statements are required.
+#
+# Since October 2025, a Function URL with auth type NONE needs two permissions:
+# lambda:InvokeFunctionUrl AND lambda:InvokeFunction. Grant only the first and every
+# request returns 403 AccessDeniedException — with a resource policy that reads as
+# completely correct, an AuthType of NONE, and a perfectly healthy function.
+#
+# The AWS provider auto-creates only the InvokeFunctionUrl statement (the pre-Oct-2025
+# shape), so the second has to be declared explicitly. Both are declared here rather
+# than relying on implicit provider behaviour, so the whole policy is visible in code.
+# ----------------------------------------------------------------------------
+
+resource "aws_lambda_permission" "url_invoke_url" {
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.api.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "url_invoke_function" {
+  statement_id  = "FunctionURLInvokeAllowPublicAccess"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.api.function_name
+  principal     = "*"
+
+  # P-02 Least Privilege. This condition is the difference between "anyone with the URL
+  # can call the API" and "any AWS principal can invoke this function directly by ARN".
+  # Without it the grant is unbounded; with it, the Function URL is the only way in.
+  invoked_via_function_url = true
+}
+
+# ----------------------------------------------------------------------------
 # On authorization_type = "NONE"
 #
 # The URL becomes publicly invokable by anyone who learns it, bypassing CloudFront.
