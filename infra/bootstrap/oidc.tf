@@ -33,6 +33,47 @@ locals {
 # The `sub` claim is where least privilege actually happens. A trust policy that only checks
 # the repo lets ANY workflow on ANY branch — including one added in a fork's PR — assume the
 # role. Scoping by context is what makes these two roles genuinely different in power.
+#
+# GitHub issues `sub` in one of two shapes, and which one you get is not something the
+# workflow controls:
+#
+#   classic       repo:praveennish/SpecSage:ref:refs/heads/main
+#   ID-qualified  repo:praveennish@82397891/SpecSage@1314955214:ref:refs/heads/main
+#
+# The ID-qualified form binds the trust to immutable numeric IDs, so renaming or transferring
+# the repository cannot carry the permissions with it. Trusting only the classic form fails
+# with `Not authorized to perform sts:AssumeRoleWithWebIdentity` — a message that never says
+# which subject it refused, which is why this cost a debugging session on 2026-08-17 and why
+# ci.yml now prints the claim before attempting the assume.
+#
+# Both forms are enumerated explicitly rather than wildcarded. `repo:praveennish*/SpecSage*:…`
+# would cover both in one pattern, but `praveennish*` also matches `praveennish-evil`, and a
+# trust policy is the wrong place to save four lines.
+
+locals {
+  gha_repo_prefixes = [
+    "repo:${var.github_repository}",
+    format(
+      "repo:%s@%s/%s@%s",
+      split("/", var.github_repository)[0],
+      split("/", var.github_repository_ids)[0],
+      split("/", var.github_repository)[1],
+      split("/", var.github_repository_ids)[1],
+    ),
+  ]
+
+  # Plan role: pull requests and pushes to main.
+  gha_plan_subs = flatten([
+    for p in local.gha_repo_prefixes : [
+      "${p}:pull_request",
+      "${p}:ref:refs/heads/main",
+    ]
+  ])
+
+  # Deploy role: only tokens minted for the `dev` environment, which GitHub issues only after
+  # the environment's protection rules are satisfied.
+  gha_deploy_subs = [for p in local.gha_repo_prefixes : "${p}:environment:dev"]
+}
 
 data "aws_iam_policy_document" "gha_plan_trust" {
   statement {
@@ -54,10 +95,7 @@ data "aws_iam_policy_document" "gha_plan_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repository}:pull_request",
-        "repo:${var.github_repository}:ref:refs/heads/main",
-      ]
+      values   = local.gha_plan_subs
     }
   }
 }
@@ -85,7 +123,7 @@ data "aws_iam_policy_document" "gha_deploy_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:environment:dev"]
+      values   = local.gha_deploy_subs
     }
   }
 }

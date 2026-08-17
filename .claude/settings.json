@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make smoke *)",
+      "Bash(make verify-empty *)",
+      "Bash(curl -s -o /dev/null -w \"  github.com/praveennish/SpecSage -> HTTP %{http_code}\\\\n\" https://github.com/praveennish/SpecSage)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('  full_name:', d['full_name']\\); print\\('  owner.login:', d['owner']['login']\\)\")"
+    ]
+  }
+}
