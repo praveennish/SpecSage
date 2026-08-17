@@ -102,8 +102,14 @@ jobs:
       pull-requests: write # required to post the plan as a comment
     strategy:
       fail-fast: false
+      # bootstrap is deliberately absent. It keeps LOCAL state (it creates the bucket every
+      # other layer stores state in — chicken and egg), so a runner has no state for it and
+      # would plan "15 resources to add" for resources that already exist. A confidently
+      # wrong plan proposing to recreate the state bucket and the OIDC provider on every PR
+      # is worse than no plan at all. It is syntax-checked by the `bootstrap-validate` job
+      # below instead.
       matrix:
-        layer: [bootstrap, data, compute]
+        layer: [data, compute]
     steps:
       - uses: actions/checkout@v4
 
@@ -253,3 +259,27 @@ jobs:
         run: |
           echo "::error::terraform plan failed for ${{ matrix.layer }}"
           exit 1
+
+  bootstrap-validate:
+    name: Terraform validate (bootstrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+
+      # -backend=false skips state entirely: no bucket, no credentials, no AWS call. That is
+      # the only thing CI can honestly say about this layer — the config is syntactically
+      # valid and internally consistent. Whether it MATCHES reality is answered by running
+      # `terraform plan` locally, where the state actually lives (RUNBOOK §5).
+      #
+      # Variables are not supplied because `validate` does not evaluate them. `plan` would
+      # need budget_alert_email, which has no default and lives only in the gitignored
+      # terraform.tfvars — another reason this layer cannot be planned from CI.
+      - name: validate
+        working-directory: infra/bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
