@@ -114,6 +114,69 @@ jobs:
       - name: fmt
         run: terraform fmt -check -recursive infra/
 
+      # Fail with a readable message before AWS does. `Not authorized to perform
+      # sts:AssumeRoleWithWebIdentity` never names the ARN it tried, so an unset or
+      # transposed variable is indistinguishable from a genuine trust-policy mismatch.
+      #
+      # The commonest cause is scope: variables added under Settings -> Environments -> dev
+      # are ENVIRONMENT variables, visible only to jobs declaring `environment: dev`. This
+      # job deliberately declares none (a read-only plan should not consume the deploy gate),
+      # so it needs REPOSITORY variables. Both live in the same UI, one tab apart.
+      - name: preflight — check repo variables
+        env:
+          PLAN_ROLE: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          fail=0
+          for v in PLAN_ROLE ACCOUNT REGION; do
+            if [ -z "${!v}" ]; then
+              echo "::error::vars.$v is empty — add it as a REPOSITORY variable (Settings -> Secrets and variables -> Actions -> Variables), not an environment variable"
+              fail=1
+            fi
+          done
+          [ "$fail" = 1 ] && exit 1
+
+          echo "plan role : $PLAN_ROLE"
+          echo "account   : $ACCOUNT"
+          echo "region    : $REGION"
+
+          case "$PLAN_ROLE" in
+            *specsage-gha-plan) : ;;
+            *specsage-gha-deploy)
+              echo "::error::AWS_PLAN_ROLE_ARN points at the DEPLOY role. That role trusts only sub=…:environment:dev, which this job never presents. The two ARNs are transposed."
+              exit 1 ;;
+            *)
+              echo "::warning::unexpected role name in AWS_PLAN_ROLE_ARN" ;;
+          esac
+
+      # Prints the OIDC token's sub/aud claims so an AssumeRoleWithWebIdentity denial can be
+      # diagnosed from fact rather than inference — the error itself never says which subject
+      # was presented, only that it was refused.
+      #
+      # Only the claims are printed, never the token. Claims are not secret: `sub` is just
+      # repo:<owner>/<name>:<context>. Compare it against the role's trust policy:
+      #   aws iam get-role --role-name specsage-gha-plan \
+      #     --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition'
+      #
+      # Runs unconditionally. The claims are not secret and this is precisely the failure
+      # you cannot diagnose without them — AWS's denial never echoes the subject it refused.
+      - name: debug OIDC subject
+        run: |
+          tok=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          python3 - "$tok" <<'PY'
+          import base64, json, sys
+          payload = sys.argv[1].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          for k in ("sub", "aud", "repository", "ref", "environment", "event_name"):
+              if k in claims:
+                  print(f"{k:12} = {claims[k]}")
+          PY
+          echo "role requested: ${{ vars.AWS_PLAN_ROLE_ARN }}"
+
       # Short-lived credentials from a GitHub-signed JWT. The role's trust policy accepts
       # only sub=repo:…:pull_request or ref:refs/heads/main, so this cannot be assumed
       # from a fork or an arbitrary branch.
