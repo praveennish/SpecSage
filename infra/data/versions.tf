@@ -18,10 +18,22 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "specsage-tfstate-941500193593"
-    key          = "data/terraform.tfstate"
-    region       = "us-east-1"
-    profile      = "specsage"
+    bucket = "specsage-tfstate-941500193593"
+    key    = "data/terraform.tfstate"
+    region = "us-east-1"
+    # NOTE: no `profile` here.
+    #
+    # Backend blocks are evaluated BEFORE variables exist, so `profile = var.aws_profile`
+    # is impossible and a hardcoded "specsage" breaks CI — a GitHub runner has no
+    # ~/.aws/credentials, and Terraform fails with `failed to get shared config profile`
+    # before it reaches the provider at all.
+    #
+    # Credential resolution is left to the environment instead:
+    #   local  -> AWS_PROFILE=specsage (exported by the Makefile, set in RUNBOOK §2.3)
+    #   CI     -> AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN injected by the OIDC action
+    #
+    # The wrong-account guard still holds: allowed_account_ids on the provider fails at plan
+    # time, and a mismatched identity cannot read this state bucket in the first place.
     encrypt      = true
     use_lockfile = true # Terraform >= 1.10: lock lives in S3, no DynamoDB table (D-006)
   }
