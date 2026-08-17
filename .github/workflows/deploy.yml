@@ -1,0 +1,247 @@
+# Manual deploy and teardown.
+#
+# workflow_dispatch rather than on-push (D-018): the `compute` layer is destroyed between
+# work sessions, so a deploy-on-merge workflow would be a no-op most of the time — and a
+# workflow that usually does nothing is one nobody reads the output of.
+#
+# THE APPROVAL GATE IS ENFORCED BY IAM, NOT BY THIS FILE.
+#
+# `environment: dev` below is what makes GitHub mint an OIDC token whose sub claim reads
+#   repo:praveennish/SpecSage:environment:dev
+# and specsage-gha-deploy's trust policy accepts that one literal string and nothing else.
+# Delete the line and the job cannot authenticate at all — it does not silently proceed
+# ungated. A protection rule that lives only in YAML can be edited away in the same PR that
+# abuses it; a trust policy cannot.
+#
+# On a private repo on the free plan, GitHub cannot attach a required-reviewer rule to the
+# environment, so nothing pauses for approval. The `confirm` input below is a partial
+# substitute — weaker, because it is YAML. Making the repository public activates the real
+# reviewer gate with no change to this file.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        required: true
+        default: deploy
+        options: [deploy, teardown]
+      confirm:
+        description: 'Type "yes" to proceed'
+        type: string
+        required: true
+      image_tag:
+        description: "Image tag to deploy (blank = this commit's short SHA)"
+        type: string
+        required: false
+
+# Never let two applies race for the same Terraform state lock.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Confirm
+    runs-on: ubuntu-latest
+    steps:
+      - name: check confirmation
+        if: inputs.confirm != 'yes'
+        run: |
+          echo "::error::confirm must be exactly 'yes' (got '${{ inputs.confirm }}')"
+          exit 1
+
+  deploy:
+    name: Deploy
+    needs: guard
+    if: inputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    environment: dev # load-bearing — see the header
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      url: ${{ steps.outputs.outputs.public_url }}
+      sha: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: resolve image tag
+        id: tag
+        run: |
+          tag="${{ inputs.image_tag }}"
+          [ -z "$tag" ] && tag="$(git rev-parse --short HEAD)"
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "deploying $tag"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: assume deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      # ECR is IMMUTABLE (P-04). Re-pushing an existing tag fails, which is correct — one
+      # commit, one image — but it should short-circuit rather than fail the build.
+      - name: skip build if this tag already exists
+        id: exists
+        env:
+          TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          if aws ecr describe-images --repository-name specsage-api \
+               --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "$TAG already in ECR — reusing it"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --provenance/--sbom false is load-bearing, not stylistic: attestations make buildx
+      # publish an OCI image index and put the tag on it, leaving the real image as an
+      # untagged child the ECR lifecycle policy can delete out from under a live tag (D-028).
+      - name: build and push
+        if: steps.exists.outputs.found == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          provenance: false
+          sbom: false
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/specsage-api:${{ steps.tag.outputs.image_tag }}
+          build-args: GIT_SHA=${{ steps.tag.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: apply compute
+        working-directory: infra/compute
+        env:
+          TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_aws_profile: ""
+          TF_VAR_image_tag: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+      - name: wait for the function to settle
+        run: aws lambda wait function-updated-v2 --function-name specsage-api
+
+      - name: attach CloudFront origin
+        working-directory: infra/data
+        env:
+          TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_aws_profile: ""
+        run: |
+          terraform init -input=false
+          url=$(terraform -chdir=../compute output -raw function_url)
+          terraform apply -auto-approve -input=false -var="lambda_function_url=$url"
+
+      - name: wait for CloudFront
+        working-directory: infra/data
+        run: |
+          aws cloudfront wait distribution-deployed \
+            --id "$(terraform output -raw cloudfront_distribution_id)"
+
+      - name: outputs
+        id: outputs
+        working-directory: infra/data
+        run: echo "public_url=$(terraform output -raw public_url)" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+
+      # The check that distinguishes "apply succeeded" from "the new code is serving".
+      # A 200 alone proves neither.
+      - name: smoke test
+        env:
+          SPECSAGE_URL: ${{ steps.outputs.outputs.public_url }}
+          EXPECTED_GIT_SHA: ${{ steps.tag.outputs.image_tag }}
+        run: uv run pytest -m smoke -v
+
+      - name: summary
+        run: |
+          {
+            echo "### Deployed"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | ${{ steps.outputs.outputs.public_url }} |"
+            echo "| Image tag | \`${{ steps.tag.outputs.image_tag }}\` |"
+            echo "| Smoke test | passed — deployed SHA matches |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  teardown:
+    name: Teardown
+    needs: guard
+    if: inputs.action == 'teardown'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+
+      - name: assume deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-teardown-${{ github.run_id }}
+
+      # Order matters: detach the origin first so CloudFront falls back to the paused page
+      # cleanly, rather than pointing at a Lambda that is being deleted underneath it.
+      - name: detach CloudFront origin
+        working-directory: infra/data
+        env:
+          TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_aws_profile: ""
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false -var="lambda_function_url="
+
+      # NOTE for M3+: this must snapshot Qdrant and export Neo4j to the artifacts bucket
+      # BEFORE destroying. Rebuilding the M4 graph costs one LLM call per chunk (D-013).
+      - name: destroy compute
+        working-directory: infra/compute
+        env:
+          TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_aws_profile: ""
+          TF_VAR_image_tag: unused-on-destroy
+        run: |
+          terraform init -input=false
+          terraform destroy -auto-approve -input=false
+
+      - name: verify nothing billable remains
+        run: |
+          fns=$(aws lambda list-functions \
+            --query 'Functions[?starts_with(FunctionName,`specsage`)].FunctionName' --output text)
+          if [ -n "$fns" ]; then
+            echo "::error::compute resources still present: $fns"; exit 1
+          fi
+          echo "clean — only the data layer remains (~\$1.30/mo)" >> "$GITHUB_STEP_SUMMARY"

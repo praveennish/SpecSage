@@ -1,0 +1,192 @@
+# Pull-request checks. Fully automatic, and deliberately independent of deployed
+# infrastructure — the `compute` layer is destroyed most of the time (D-017), so anything
+# that needed a live endpoint would be red by default and quickly ignored.
+#
+# The one AWS interaction is `terraform plan`, which assumes a READ-ONLY role via OIDC.
+# There are no AWS credentials in this repository (D-009).
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch. A PR pushed three times should not hold
+# three sets of runners.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-groups
+
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      # The architectural boundary from D-002: `retrieval` must not import an agent
+      # framework. This is the only thing standing between "swappable orchestration" as a
+      # design claim and as a fact.
+      - name: import boundaries
+        run: uv run lint-imports
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-groups
+
+      # Excludes smoke and integration: both need live infrastructure that is usually
+      # torn down. Smoke tests run in deploy.yml, against what was just deployed.
+      - name: pytest
+        run: uv run pytest -m "not smoke and not integration" --cov --cov-report=term-missing
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only, no push — catches Dockerfile breakage during review rather than at
+      # deploy time. --provenance=false --sbom=false matches the deploy build exactly:
+      # attestations would publish an OCI image index whose untagged children the ECR
+      # lifecycle policy can delete, breaking a tag that still resolves (see D-028 and
+      # the M0 compute runbook). Also exercises the build-time shebang assertion.
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          provenance: false
+          sbom: false
+          push: false
+          build-args: GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  terraform:
+    name: Terraform plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required to request the OIDC token
+      pull-requests: write # required to post the plan as a comment
+    strategy:
+      fail-fast: false
+      matrix:
+        layer: [bootstrap, data, compute]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+
+      - name: fmt
+        run: terraform fmt -check -recursive infra/
+
+      # Short-lived credentials from a GitHub-signed JWT. The role's trust policy accepts
+      # only sub=repo:…:pull_request or ref:refs/heads/main, so this cannot be assumed
+      # from a fork or an arbitrary branch.
+      - name: assume plan role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-plan-${{ github.run_id }}
+
+      - name: init
+        working-directory: infra/${{ matrix.layer }}
+        run: terraform init -input=false
+
+      - name: validate
+        working-directory: infra/${{ matrix.layer }}
+        run: terraform validate
+
+      - name: plan
+        id: plan
+        working-directory: infra/${{ matrix.layer }}
+        continue-on-error: true
+        env:
+          TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          # CI has no ~/.aws/credentials; the OIDC session supplies credentials directly,
+          # so the profile pin used locally must be blanked out.
+          TF_VAR_aws_profile: ""
+          # compute requires an explicit image tag (no default, by design — D-028/P-04).
+          TF_VAR_image_tag: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -lock=false \
+            -detailed-exitcode 2>&1 | tee /tmp/plan-${{ matrix.layer }}.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          LAYER: ${{ matrix.layer }}
+        with:
+          script: |
+            const fs = require('fs');
+            const layer = process.env.LAYER;
+            let body = fs.readFileSync(`/tmp/plan-${layer}.txt`, 'utf8');
+            // GitHub comments cap at 65536 characters.
+            if (body.length > 60000) body = body.slice(0, 60000) + '\n…truncated…';
+            const marker = `<!-- tf-plan-${layer} -->`;
+            const text = `${marker}\n### Terraform plan — \`${layer}\`\n\n<details><summary>show</summary>\n\n\`\`\`hcl\n${body}\n\`\`\`\n\n</details>`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            // Update in place rather than appending on every push — a 10-commit PR should
+            // not accumulate 30 plan comments.
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body: text,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body: text,
+              });
+            }
+
+      # exitcode 1 = plan genuinely failed. exitcode 2 = changes present, which is normal
+      # on a PR that edits infrastructure. Only 1 fails the job.
+      - name: fail on plan error
+        if: steps.plan.outputs.exitcode == '1'
+        run: |
+          echo "::error::terraform plan failed for ${{ matrix.layer }}"
+          exit 1
