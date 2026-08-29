@@ -8,6 +8,7 @@ AWS_REGION        ?= us-east-1
 TF_DIR            ?= infra/environments/dev
 
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+PROJECT := specsage
 
 .PHONY: help
 help: ## Show this help
@@ -133,6 +134,36 @@ deploy: check-aws ## Build, push, and roll the function to the current commit
 # --provenance=false --sbom=false is load-bearing, not stylistic: attestations make buildx
 # publish an OCI image index and put the tag on it, leaving the real image as an untagged
 # child that the ECR lifecycle policy will eventually delete. See D-028.
+
+.PHONY: ingest
+ingest: check-aws ## Run the M1 corpus ingestion Fargate task and tail its logs
+	@echo "==> starting ingestion task"
+	@subnets=$$($(TF_COMPUTE) output -raw subnet_ids); \
+	sg=$$($(TF_COMPUTE) output -raw task_security_group_id); \
+	cluster=$$($(TF_COMPUTE) output -raw ecs_cluster); \
+	taskdef=$$($(TF_COMPUTE) output -raw ingestion_task_definition); \
+	arn=$$(aws ecs run-task \
+	    --cluster "$$cluster" \
+	    --task-definition "$$taskdef" \
+	    --launch-type FARGATE \
+	    --network-configuration "awsvpcConfiguration={subnets=[$$subnets],securityGroups=[$$sg],assignPublicIp=ENABLED}" \
+	    --query 'tasks[0].taskArn' --output text); \
+	echo "  task: $$arn"; \
+	echo "==> waiting for it to stop (~40s)"; \
+	aws ecs wait tasks-stopped --cluster "$$cluster" --tasks "$$arn"; \
+	code=$$(aws ecs describe-tasks --cluster "$$cluster" --tasks "$$arn" \
+	    --query 'tasks[0].containers[0].exitCode' --output text); \
+	reason=$$(aws ecs describe-tasks --cluster "$$cluster" --tasks "$$arn" \
+	    --query 'tasks[0].stoppedReason' --output text); \
+	echo "==> logs"; \
+	aws logs tail /ecs/$(PROJECT)-ingestion --since 10m --format short | sed 's/^/    /'; \
+	echo "==> exit code $$code ($$reason)"; \
+	test "$$code" = "0"
+
+# The network-configuration shorthand is assembled on one line on purpose. The AWS CLI
+# shorthand parser rejects newlines and spaces inside awsvpcConfiguration={...}, so the
+# readable multi-line form in the runbook does not actually work — which is exactly the kind
+# of thing that belongs in a tested Make target rather than a doc someone pastes from.
 
 .PHONY: smoke
 smoke: ## Smoke-test the live URL and assert the deployed SHA

@@ -238,18 +238,32 @@ the task has no route to the internet at all. It will sit in `PROVISIONING`, fai
 image, and stop with `CannotPullContainerError` — which reads like an ECR permissions problem
 and is not.
 
-Or from the CLI:
+Or from the repo root:
+
+```bash
+make ingest
+```
+
+That target reads the subnet IDs, security group, cluster, and task definition from Terraform
+outputs, starts the task, waits for it to stop, prints the logs, and **exits non-zero if the
+container did**.
+
+> **Why a Make target rather than a command to paste.** The AWS CLI shorthand parser rejects
+> newlines and spaces inside `awsvpcConfiguration={...}`, so a nicely-formatted multi-line
+> version of this command does not work — it has to be assembled on one line. An earlier draft
+> of this runbook had exactly that bug. A command that has to be exactly right is a command
+> that belongs somewhere it can be tested, not in a document someone copies from.
+
+If you do want the raw call — note it is a single line:
 
 ```bash
 export AWS_PROFILE=specsage
-aws ecs run-task \
-  --cluster specsage \
-  --task-definition specsage-ingestion \
+SUBNETS=$(terraform -chdir=infra/compute output -raw subnet_ids)
+SG=$(terraform -chdir=infra/compute output -raw task_security_group_id)
+
+aws ecs run-task --cluster specsage --task-definition specsage-ingestion \
   --launch-type FARGATE \
-  --network-configuration 'awsvpcConfiguration={
-      subnets=['"$(cd infra/compute && terraform output -raw subnet_ids)"'],
-      securityGroups=['"$(cd infra/compute && terraform output -raw task_security_group_id)"'],
-      assignPublicIp=ENABLED}'
+  --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}"
 ```
 
 ### Watching it
