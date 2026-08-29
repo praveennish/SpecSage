@@ -37,6 +37,7 @@ COPY pyproject.toml uv.lock* ./
 RUN uv sync --no-dev --no-install-project
 
 COPY service/ ./service/
+COPY ingestion/ ./ingestion/
 RUN uv sync --no-dev
 
 # Fail the BUILD if the shebang is ever wrong again, rather than discovering it at invoke.
@@ -63,7 +64,17 @@ WORKDIR /app
 
 # Same path in both stages — see the WORKDIR comment in the build stage.
 COPY --from=build --chown=specsage:specsage /app/.venv /app/.venv
+# ONE IMAGE, TWO ENTRYPOINTS.
+#
+# The API runs it with the CMD below (Lambda, via the Web Adapter). The M1 ingestion Fargate
+# task runs the same image with `command = ["python","-m","ingestion",...]` overridden in its
+# task definition.
+#
+# Two images would mean two build pipelines, two ECR repos, two lifecycle policies, and two
+# chances for the deployed SHA to mean different things in different places. The shared
+# dependency set is small (httpx, boto3, pypdf) and the image is 57 MB either way.
 COPY --chown=specsage:specsage service/ /app/service/
+COPY --chown=specsage:specsage ingestion/ /app/ingestion/
 
 USER specsage
 EXPOSE 8000

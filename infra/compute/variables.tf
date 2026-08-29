@@ -66,3 +66,15 @@ variable "log_retention_days" {
   type        = number
   default     = 7
 }
+
+variable "vpc_cidr" {
+  description = "CIDR for the batch VPC. /16 is generous but costs nothing and avoids a resize."
+  type        = string
+  default     = "10.20.0.0/16"
+}
+
+variable "artifacts_bucket" {
+  description = "Durable corpus bucket, owned by the `data` layer. Referenced by name rather than remote state so the two layers stay independent (D-013)."
+  type        = string
+  default     = "specsage-artifacts-941500193593"
+}

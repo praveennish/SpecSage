@@ -31,3 +31,21 @@ output "deployed_image" {
 output "log_group" {
   value = aws_cloudwatch_log_group.api.name
 }
+
+# Consumed by the console runbook's CLI snippet and by `make ingest`.
+output "subnet_ids" {
+  description = "Comma-separated public subnet IDs for `aws ecs run-task`."
+  value       = join(",", aws_subnet.public[*].id)
+}
+
+output "task_security_group_id" {
+  value = aws_security_group.task.id
+}
+
+output "ecs_cluster" {
+  value = aws_ecs_cluster.main.name
+}
+
+output "ingestion_task_definition" {
+  value = aws_ecs_task_definition.ingestion.family
+}
