@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import logging
 import random
 import time
 from dataclasses import dataclass
@@ -45,6 +46,8 @@ BASE_BACKOFF = 2.0
 MAX_BACKOFF = 60.0
 
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+log = logging.getLogger(__name__)
 
 
 class FetchError(RuntimeError):
@@ -188,7 +191,37 @@ def _resolve_release_asset(client: httpx.Client, source: Source) -> str:
     if not source.repo or not source.asset_pattern:
         raise FetchError(f"{source.id}: GITHUB_RELEASE_ASSET needs repo and asset_pattern")
 
-    release = _get_json(client, f"https://api.github.com/repos/{source.repo}/releases/latest")
+    if source.release_tag:
+        release = _get_json(
+            client,
+            f"https://api.github.com/repos/{source.repo}/releases/tags/{source.release_tag}",
+        )
+        # Pinned for reproducibility, but not silent about it. Knowing an upstream revision
+        # exists is what turns "the pin is stale" from something you discover when a citation
+        # stops matching into something you read in a log line.
+        try:
+            latest = _get_json(
+                client, f"https://api.github.com/repos/{source.repo}/releases/latest"
+            )
+            latest_tag = latest.get("tag_name") if isinstance(latest, dict) else None
+            if latest_tag and latest_tag != source.release_tag:
+                log.warning(
+                    "%s is pinned to %s but upstream latest is %s — bump the pin deliberately "
+                    "and expect it to invalidate golden-set section references",
+                    source.id,
+                    source.release_tag,
+                    latest_tag,
+                )
+        except FetchError:
+            log.info("%s: could not check for a newer release (non-fatal)", source.id)
+    else:
+        log.warning(
+            "%s has no release_tag and tracks `latest` — the corpus can shift under M7's "
+            "golden set without warning",
+            source.id,
+        )
+        release = _get_json(client, f"https://api.github.com/repos/{source.repo}/releases/latest")
+
     assets = release.get("assets", []) if isinstance(release, dict) else []
     names = [a["name"] for a in assets]
 
@@ -208,9 +241,12 @@ def _resolve_tree(client: httpx.Client, source: Source) -> list[tuple[str, str]]
     if not source.repo or not source.path:
         raise FetchError(f"{source.id}: GITHUB_TREE needs repo and path")
 
-    listing = _get_json(
-        client, f"https://api.github.com/repos/{source.repo}/contents/{source.path}"
-    )
+    url = f"https://api.github.com/repos/{source.repo}/contents/{source.path}"
+    if source.ref:
+        url += f"?ref={source.ref}"
+    else:
+        log.warning("%s has no ref and tracks the default branch", source.id)
+    listing = _get_json(client, url)
     if not isinstance(listing, list):
         raise FetchError(f"{source.id}: {source.path} is not a directory")
 
@@ -237,16 +273,25 @@ def fetch_source(source: Source, workdir: Path) -> list[FetchedDoc]:
     after would mean a restricted document briefly exists on disk — and on a task with an S3
     upload step, "briefly on disk" is one bug away from "in the bucket".
     """
+    # Unimplemented fetch kinds are rejected FIRST, ahead of the licence check.
+    #
+    # Both guards would reject arXiv — its declared licence is deliberately the restrictive
+    # arXiv default so the registry fails closed if the CC-BY filter is ever bypassed. But
+    # "arXiv ingestion is deferred, here is why" is a far more actionable message than
+    # "ARXIV-PERPETUAL-NONEXCLUSIVE does not permit redistribution", which would send you
+    # looking for a licensing problem rather than an unimplemented resolver.
+    #
+    # This does not weaken the licence-before-network ordering: no I/O happens here either.
+    if source.fetch_kind is FetchKind.ARXIV_QUERY:
+        raise FetchError(
+            f"{source.id}: arXiv ingestion is deferred — the Atom API exposes no licence "
+            f"field and OAI-PMH moved to oaipmh.arxiv.org. See the note in sources.py."
+        )
+
     licence = assert_redistributable(source.licence, licence_url=source.licence_url)
     out: list[FetchedDoc] = []
 
     with _client() as client:
-        if source.fetch_kind is FetchKind.ARXIV_QUERY:
-            raise FetchError(
-                f"{source.id}: arXiv ingestion is deferred — the Atom API exposes no licence "
-                f"field and OAI-PMH moved to oaipmh.arxiv.org. See the note in sources.py."
-            )
-
         if source.fetch_kind is FetchKind.GITHUB_TREE:
             targets = _resolve_tree(client, source)
         elif source.fetch_kind is FetchKind.GITHUB_RELEASE_ASSET:

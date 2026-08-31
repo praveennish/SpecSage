@@ -67,6 +67,18 @@ class Source:
     repo: str | None = None
     path: str | None = None
     asset_pattern: str | None = None  # GITHUB_RELEASE_ASSET: exact asset name
+    # PINNING. Empty means "track upstream", which is the wrong default for a corpus whose
+    # golden set (M7) is keyed to section numbers: if the document shifts underneath, the
+    # evaluation silently rots and reports a number for a corpus that no longer exists.
+    #
+    # This is not hypothetical. RISC-V cut a new release two days into M1 and riscv-spec.pdf
+    # changed by 118 bytes between two runs a week apart.
+    #
+    # The fetcher still queries `latest` and LOGS when it differs from the pin, so pinning
+    # buys reproducibility without buying silence. Bumping a pin is then a deliberate commit
+    # that shows up in review, alongside whatever golden-set changes it forces.
+    release_tag: str | None = None  # GITHUB_RELEASE_ASSET
+    ref: str | None = None  # GITHUB_TREE: branch, tag, or commit SHA
     suffixes: tuple[str, ...] = ()
     # ARXIV_QUERY only
     query: str | None = None
@@ -96,6 +108,7 @@ RISCV_ISA_MANUAL = Source(
     url="https://github.com/riscv/riscv-isa-manual",
     repo="riscv/riscv-isa-manual",
     asset_pattern="riscv-spec.pdf",
+    release_tag="riscv-isa-release-07531fd-2026-08-24",
     est_pages=700,
     notes="Densest cross-reference source in the corpus. Primary M4 graph material.",
     tags=("riscv", "isa"),
@@ -112,6 +125,7 @@ DEVICETREE_SPEC = Source(
     url="https://github.com/devicetree-org/devicetree-specification",
     repo="devicetree-org/devicetree-specification",
     asset_pattern="devicetree-specification-v*.pdf",
+    release_tag="v0.4",
     est_pages=120,
     notes="Clean numbered sections — a good control against the messier RISC-V layout.",
     tags=("devicetree",),
@@ -129,6 +143,7 @@ LINUX_ARM64_DOCS = Source(
     repo="torvalds/linux",
     path="Documentation/arch/arm64",
     suffixes=(".rst", ".txt"),
+    ref="v7.2",  # a kernel release tag, not `master` — see release_tag above
     est_pages=40,
     notes="reStructuredText, no page concept. Forces M2 to handle a non-paginated type.",
     tags=("linux", "arm64"),
