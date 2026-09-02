@@ -53,10 +53,18 @@ REDISTRIBUTABLE: frozenset[str] = frozenset(
         "BSD-2-Clause",
         "BSD-3-Clause",
         "MIT",
-        # The Linux kernel's Documentation/ carries a GPL-2.0 exception permitting
-        # redistribution of documentation. Not SPDX; spelled out so a reader can see it was a
-        # considered inclusion rather than a typo.
-        "GPL-2.0-with-docs-exception",
+        # Linux kernel Documentation/ is plain GPL-2.0 — verified: every file under
+        # arch/arm64 and arch/x86 carries `SPDX-License-Identifier: GPL-2.0`. There is no
+        # "docs exception" making it permissive (an earlier value here implied one); GPL-2.0
+        # itself permits verbatim and modified redistribution, and the .rst *is* the source,
+        # so the copyleft's source-availability duty is met by shipping the files.
+        #
+        # It differs from every permissive entry above in one way that matters downstream:
+        # it is COPYLEFT. Derivatives SpecSage publishes from these files — quoted chunks in
+        # answers, the M7 eval site — must carry GPL-2.0 for the kernel-doc-derived portions.
+        # Short attributed quotation (what a RAG citation is) stays well inside that. See
+        # DECISION-LOG D-029.
+        "GPL-2.0-only",
         # A hardware vendor publishing a datasheet for public use without naming a standard
         # licence. Not SPDX, and a judgement rather than a licence — so it requires
         # `licence_url` evidence. See assert_redistributable().

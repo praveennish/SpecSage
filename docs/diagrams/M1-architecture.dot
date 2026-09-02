@@ -1,0 +1,70 @@
+// SpecSage M1 — Data Acquisition as a Cloud Job
+// Render:  dot -Tpng -Gdpi=140 docs/diagrams/M1-architecture.dot -o docs/diagrams/M1-architecture.png
+digraph M1 {
+  rankdir=TB; compound=true; splines=spline;
+  fontname="Helvetica"; fontsize=12; labelloc="t";
+  label="SpecSage M1 — corpus acquisition: EventBridge / manual  ->  Fargate one-off task  ->  s3://…/raw/\n ";
+  nodesep=0.35; ranksep=0.55;
+  node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#f4f4f4", color="#888888"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555"];
+
+  // ---- triggers -------------------------------------------------------
+  subgraph cluster_trigger {
+    label="Trigger — either path runs the same task definition"; style="rounded,dashed"; color="#999999"; fontsize=10;
+    eb   [label="EventBridge rule\nspecsage-ingestion\nstate = DISABLED (on-demand)", fillcolor="#fde9d9"];
+    hand [label="make ingest\n— or —\nECS console ▸ Run new task", fillcolor="#fde9d9"];
+  }
+
+  // ---- upstream sources --------------------------------------------------
+  subgraph cluster_src {
+    label="Upstream sources — pinned by release_tag / ref"; style="rounded,dashed"; color="#999999"; fontsize=10;
+    src [label="GitHub Releases: riscv-isa-manual, devicetree-spec\lGitHub tree: torvalds/linux Documentation/arch/arm64 @ v7.2\ldatasheets.raspberrypi.com: bcm2711-peripherals.pdf\l", fillcolor="#ffffff"];
+  }
+
+  // ---- compute layer -------------------------------------------------
+  subgraph cluster_compute {
+    label="compute layer — infra/compute/{network,ecs,iam-task}.tf — destroyed between sessions";
+    style="rounded,filled"; fillcolor="#eef3fb"; color="#4472c4"; fontsize=10;
+
+    subgraph cluster_iam {
+      label="IAM (iam-task.tf) — three roles, three questions"; style="rounded"; color="#70ad47"; fontsize=9;
+      role_exec [label="specsage-task-execution\nECR pull + Logs write\n(ECS agent, pre-start)", fillcolor="#e2efda"];
+      role_task [label="specsage-ingestion-task\ns3:PutObject on raw/* only\n(the container)", fillcolor="#e2efda"];
+      role_evt  [label="specsage-events-invoke-ecs\necs:RunTask + scoped iam:PassRole", fillcolor="#e2efda"];
+    }
+
+    subgraph cluster_task {
+      label="ECS Fargate task  specsage-ingestion  —  0.5 vCPU / 1 GB · Linux/ARM64\npublic subnet · assignPublicIp=ENABLED · security group has no inbound rules";
+      style="rounded,filled"; fillcolor="#ffffff"; color="#4472c4"; fontsize=9;
+      s1 [label="1  licence preflight\nall sources, before any\ndownload — assert_redistributable()", fillcolor="#fff2cc"];
+      s2 [label="2  fetch\nretry / backoff, stream to\ndisk, SHA-256 while streaming", fillcolor="#fff2cc"];
+      s3 [label="3  page ceiling\nhalt if > 1500 pages", fillcolor="#fff2cc"];
+      s4 [label="4  upload\nPUT raw/<source>/<file>\nskip when remote SHA matches", fillcolor="#fff2cc"];
+      s5 [label="5  manifest\nraw/manifest.yaml\nwritten LAST", fillcolor="#fff2cc"];
+      s1 -> s2 -> s3 -> s4 -> s5;
+    }
+
+    logs [label="CloudWatch Logs\n/ecs/specsage-ingestion\n7-day retention"];
+  }
+
+  // ---- data layer --------------------------------------------------
+  subgraph cluster_data {
+    label="data layer — infra/data/ — never destroyed"; style="rounded,filled"; fillcolor="#f2f2f2"; color="#7f7f7f"; fontsize=10;
+    ecr   [label="ECR  specsage-api:<git-sha>\none image, two entrypoints:\nuvicorn for Lambda; command\noverride runs python -m ingestion"];
+    s3raw [label="S3  specsage-artifacts-941500193593\nraw/<source_id>/<filename>\nraw/manifest.yaml\nSHA-256 kept as object metadata", fillcolor="#dae8fc"];
+  }
+
+  prov [label="docs/PROVENANCE.md\nmirrored from manifest,\ncommitted to git", shape=note, fillcolor="#f4f4f4"];
+
+  // ---- edges -----------------------------------------------------
+  eb   -> role_evt [label="triggers"];
+  role_evt -> s1   [label="RunTask", lhead=cluster_task, style=dashed];
+  hand -> s1       [label="RunTask", lhead=cluster_task, style=dashed];
+  ecr  -> s1       [label="image pull — role: task-execution", lhead=cluster_task, color="#4472c4"];
+  src  -> s2       [label="HTTPS egress via IGW (no NAT)", color="#c00000"];
+  s4   -> s3raw    [label="PutObject raw/*\nrole: ingestion-task", color="#4472c4"];
+  s5   -> s3raw    [label="PutObject manifest", color="#4472c4"];
+  s5   -> logs     [style=dotted, label="awslogs (all steps)"];
+  s3raw -> prov    [label="operator mirrors + commits", style=dashed];
+
+}

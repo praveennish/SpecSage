@@ -237,27 +237,41 @@ def _resolve_release_asset(client: httpx.Client, source: Source) -> str:
 
 
 def _resolve_tree(client: httpx.Client, source: Source) -> list[tuple[str, str]]:
-    """List (filename, download_url) for files in a GitHub directory."""
+    """List (filename, download_url) for files under a GitHub directory, RECURSIVELY.
+
+    `filename` is the path *relative to* `source.path`, so a nested file keeps its upstream
+    layout (`x86_64/mm.rst`) and cannot collide with a same-named file in another subdirectory.
+    Storage maps that straight onto the S3 key: `raw/<source_id>/x86_64/mm.rst`.
+
+    Recursion matters for `Documentation/arch/x86`, whose `x86_64/` and `i386/` subdirectories
+    hold some of the most useful pages (the address-space map, 5-level paging). It is a no-op
+    for a flat directory like `Documentation/arch/arm64`.
+    """
     if not source.repo or not source.path:
         raise FetchError(f"{source.id}: GITHUB_TREE needs repo and path")
-
-    url = f"https://api.github.com/repos/{source.repo}/contents/{source.path}"
-    if source.ref:
-        url += f"?ref={source.ref}"
-    else:
+    if not source.ref:
         log.warning("%s has no ref and tracks the default branch", source.id)
-    listing = _get_json(client, url)
-    if not isinstance(listing, list):
-        raise FetchError(f"{source.id}: {source.path} is not a directory")
 
-    out = []
-    for item in listing:
-        if item.get("type") != "file":
-            continue
-        name = item["name"]
-        if source.suffixes and not name.endswith(source.suffixes):
-            continue
-        out.append((name, item["download_url"]))
+    def walk(path: str, prefix: str) -> list[tuple[str, str]]:
+        url = f"https://api.github.com/repos/{source.repo}/contents/{path}"
+        if source.ref:
+            url += f"?ref={source.ref}"
+        listing = _get_json(client, url)
+        if not isinstance(listing, list):
+            raise FetchError(f"{source.id}: {path} is not a directory")
+
+        found: list[tuple[str, str]] = []
+        for item in listing:
+            name = item["name"]
+            if item.get("type") == "dir":
+                found.extend(walk(item["path"], f"{prefix}{name}/"))
+            elif item.get("type") == "file":
+                if source.suffixes and not name.endswith(source.suffixes):
+                    continue
+                found.append((f"{prefix}{name}", item["download_url"]))
+        return found
+
+    out = walk(source.path, "")
     if not out:
         raise FetchError(f"{source.id}: no files matching {source.suffixes} in {source.path}")
     return out

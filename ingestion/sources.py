@@ -4,12 +4,18 @@ Adding a source means adding a row here. Nothing else in the pipeline knows what
 contains, which is what keeps the licence gate meaningful: there is exactly one place a
 document can enter, and it cannot enter without naming a licence.
 
-**Selection rationale** (approved 2026-08-23, recorded in DECISION-LOG):
+**Selection rationale** (approved 2026-08-23, extended 2026-09-02, recorded in DECISION-LOG):
 
   Tier A + BCM2711 + CC-BY arXiv papers. Skipped: OpenTitan, Zephyr, ESP32, all blogs.
 
+  Added 2026-09-02 (D-029): Linux `Documentation/arch/x86` — the only CISC coverage. There
+  is no openly-licensed x86 ISA spec (Intel SDM / AMD APM are all-rights-reserved), so x86 is
+  covered at the kernel/systems level only; RISC-V remains the single full-ISA source.
+
   Policy (revised 2026-08-23): verified-redistributable ONLY. No index-only tier. Anything
-  whose licence does not explicitly permit redistribution is not ingested at all.
+  whose licence does not explicitly permit redistribution is not ingested at all. The kernel
+  docs are GPL-2.0 — redistributable but COPYLEFT, unlike the permissive CC-BY / BSD / Apache
+  sources; published derivatives carry GPL-2.0 for those portions (D-029).
 
   - All four structural types are represented — ISA spec, kernel doc, datasheet, paper —
     because M2's chunking tests need 2-3 sample pages per *type*, and the types differ
@@ -136,7 +142,7 @@ LINUX_ARM64_DOCS = Source(
     title="Linux Kernel Documentation — arch/arm64",
     doc_type=DocType.KERNEL_DOC,
     fetch_kind=FetchKind.GITHUB_TREE,
-    licence="GPL-2.0-with-docs-exception",
+    licence="GPL-2.0-only",  # verified: every file carries `SPDX-License-Identifier: GPL-2.0`
     licence_url="https://www.kernel.org/doc/html/latest/process/license-rules.html",
     publisher="Linux kernel community",
     url="https://github.com/torvalds/linux/tree/master/Documentation/arch/arm64",
@@ -147,6 +153,36 @@ LINUX_ARM64_DOCS = Source(
     est_pages=40,
     notes="reStructuredText, no page concept. Forces M2 to handle a non-paginated type.",
     tags=("linux", "arm64"),
+)
+
+# The x86 counterpart. Same repo, same licence, same pin — a second kernel-doc source whose
+# value is TOPICAL, not structural: it adds x86-64 systems material (virtual-memory layout,
+# 4-/5-level paging, PTI, CPU-feature and vulnerability docs, the boot protocol) that the
+# arm64 set does not cover. It is NOT an ISA specification — Intel's SDM and AMD's APM are
+# all-rights-reserved and cannot enter this corpus — so SpecSage answers x86 at the kernel /
+# systems level, and RISC-V alone at full-ISA depth. See DECISION-LOG D-029.
+#
+# `_resolve_tree` recurses, so this also pulls x86/x86_64/ and x86/i386/ (the address-space
+# map, 5-level paging, FSGSBASE): ~44 files under raw/linux-x86-docs/, some nested.
+LINUX_X86_DOCS = Source(
+    id="linux-x86-docs",
+    title="Linux Kernel Documentation — arch/x86",
+    doc_type=DocType.KERNEL_DOC,
+    fetch_kind=FetchKind.GITHUB_TREE,
+    licence="GPL-2.0-only",  # verified: every file carries `SPDX-License-Identifier: GPL-2.0`
+    licence_url="https://www.kernel.org/doc/html/latest/process/license-rules.html",
+    publisher="Linux kernel community",
+    url="https://github.com/torvalds/linux/tree/master/Documentation/arch/x86",
+    repo="torvalds/linux",
+    path="Documentation/arch/x86",
+    suffixes=(".rst", ".txt"),  # excludes the two ~350 KB .svg diagrams in the directory
+    ref="v7.2",  # same kernel release as the arm64 set, for a coherent corpus snapshot
+    est_pages=50,
+    notes=(
+        "reStructuredText, no page concept. x86-64 systems programming, not an ISA spec — "
+        "the only CISC coverage in the corpus."
+    ),
+    tags=("linux", "x86"),
 )
 
 # --------------------------------------------------------------------------- Tier C (partial)
@@ -232,6 +268,7 @@ SOURCES: list[Source] = [
     RISCV_ISA_MANUAL,
     DEVICETREE_SPEC,
     LINUX_ARM64_DOCS,
+    LINUX_X86_DOCS,
     BCM2711_PERIPHERALS,
 ]
 

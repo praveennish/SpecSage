@@ -27,14 +27,17 @@ from what the Terraform sets.
 ECS Fargate task (runs ~20s, then exits)
   python -m ingestion --bucket specsage-artifacts-941500193593
         │
-        ├─ 1. licence preflight   all 4 sources, BEFORE any download
-        ├─ 2. fetch               GitHub releases, GitHub tree, direct PDF
+        ├─ 1. licence preflight   all 5 sources, BEFORE any download
+        ├─ 2. fetch               GitHub releases, GitHub tree (recursive), direct PDF
         ├─ 3. page ceiling        halt if > 1500 pages
         ├─ 4. upload              s3://…/raw/<source>/<file>, skip if SHA matches
         └─ 5. manifest            s3://…/raw/manifest.yaml, written LAST
 ```
 
-Verified locally: **30 files, 7.2 MB, 1,136 pages, 4 sources.**
+Verified locally (dry run, 2026-09-02): **76 files, 7.6 MB, 1,136 pages, 5 sources.**
+The 1,136 pages are all PDF — the 73 kernel-doc `.rst` files have no page concept and do not
+count toward the ceiling. `linux-x86-docs` (D-029) contributes 46 files, some nested
+(`x86_64/mm.rst`), because `_resolve_tree` recurses into subdirectories.
 
 ---
 
@@ -277,13 +280,15 @@ aws logs tail /ecs/specsage-ingestion --follow
 Expected, in order:
 
 ```
-licence preflight passed for 4 source(s)
+licence preflight passed for 5 source(s)
 fetched riscv-isa-manual/riscv-spec.pdf (5542499 bytes, 906 pages)
 fetched devicetree-spec/devicetree-specification-v0.4.pdf (422295 bytes, 64 pages)
+fetched linux-arm64-docs/... (27 files, n/a pages)
+fetched linux-x86-docs/... (46 files, n/a pages)
 fetched bcm2711-peripherals/bcm2711-peripherals.pdf (1329416 bytes, 166 pages)
 page ceiling ok: 1136 / 1500
-corpus: 30 file(s), 7.2 MB, 1136 pages across 4 source(s)
-s3://specsage-artifacts-941500193593/raw/ — 30 uploaded, 0 unchanged, manifest written
+corpus: 76 file(s), 7.6 MB, 1136 pages across 5 source(s)
+s3://specsage-artifacts-941500193593/raw/ — 76 uploaded, 0 unchanged, manifest written
 ```
 
 ### Verifying
@@ -293,7 +298,7 @@ aws s3 ls s3://specsage-artifacts-941500193593/raw/ --recursive --human-readable
 aws s3 cp s3://specsage-artifacts-941500193593/raw/manifest.yaml - | head -30
 ```
 
-**Run it twice.** The second run should report `0 uploaded, 30 unchanged` — each object stores
+**Run it twice.** The second run should report `0 uploaded, 76 unchanged` — each object stores
 its SHA256 as user metadata, and an upload is skipped when the remote hash matches. That means
 a no-op run creates zero new object versions, so **any** new version in the bucket means an
 upstream document genuinely changed. That signal is the point.
@@ -321,7 +326,7 @@ In Terraform: `state = "ENABLED"` in `ecs.tf`.
 | ECS cluster | free (a namespace) | $0.00 |
 | EventBridge rule | free tier | $0.00 |
 | CloudWatch Logs | per GB, 7-day retention | ~$0.05 |
-| S3 storage (7.2 MB) | per GB | ~$0.01 |
+| S3 storage (7.6 MB) | per GB | ~$0.01 |
 | **Fargate task** | **per second while running** | **~$0.0002 per 20s run** |
 | **Total** | | **~$0.06/mo** |
 

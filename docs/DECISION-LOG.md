@@ -622,6 +622,56 @@ preserved intact under D-020.
 - **Still open:** whether to pursue Sonnet 5 access at all (support case vs. AWS Sales contact)
   is deferred — it is no longer blocking anything.
 
+### D-029 — x86 coverage via Linux `Documentation/arch/x86`; kernel-doc licence relabelled
+
+- **Status:** Active · **Date:** 2026-09-02 · **Milestone:** M1
+
+- **Decision:** Add `Documentation/arch/x86` from `torvalds/linux` (pinned `v7.2`) as the
+  source `linux-x86-docs`. This is the corpus's only CISC coverage. Recorded as an extension
+  of the 2026-08-23 selection rationale, not a new policy.
+
+- **Why not an x86 ISA specification.** There is no openly-licensed one. Intel's *Software
+  Developer's Manual* and AMD's *Architecture Programmer's Manual* are all-rights-reserved —
+  they grant "no license … to any intellectual property rights" — so they fail
+  `assert_redistributable()` and, with no index-only tier (2026-08-23 policy), cannot enter
+  at all. The kernel's x86 docs are the redistributable substitute: systems-level material
+  (x86-64 virtual-memory layout, 4-/5-level paging, PTI, PAT, MTRR, CPU-feature and
+  vulnerability docs — MDS/TAA/TSX/SGX/TDX, the boot protocol, topology enumeration). Not
+  instruction encodings or ISA semantics.
+
+- **What SpecSage may therefore claim.** *Covers RISC (RISC-V full ISA spec; ARM64 kernel
+  docs) and CISC (x86-64 kernel docs) — systems-level for ARM64/x86, full-ISA depth for
+  RISC-V.* **Not** "answers any question about any architecture": a deep x86 instruction-
+  semantics question has no source to draw on, where the RISC-V equivalent does.
+
+- **Licence relabel: `GPL-2.0-with-docs-exception` → `GPL-2.0-only`.** The old value was not a
+  real SPDX identifier and implied a permissive carve-out that does not exist. Verified: every
+  file under `arch/arm64` and `arch/x86` carries `SPDX-License-Identifier: GPL-2.0`. GPL-2.0
+  already permits verbatim and modified redistribution, and the `.rst` *is* the source, so
+  nothing is lost by the correction. Both kernel-doc sources now use `GPL-2.0-only`.
+
+- **Copyleft, and what it reaches.** Unlike the permissive CC-BY / BSD / Apache sources, GPL-2.0
+  is copyleft. Storing each file as its own S3 object is mere aggregation and does not relicense
+  anything else. But M2 chunks and M4 graph triples derived from these files are plausibly
+  derivative works; if SpecSage **publishes** them (the M7 eval site, or verbatim chunk text in
+  answers), the x86/arm64-derived portions must carry GPL-2.0 attribution. Mitigation is the
+  existing design intent: short, always-attributed cited spans, never bulk verbatim
+  republication. This risk already existed via `linux-arm64-docs`; x86 widens it, it does not
+  introduce it.
+
+- **Fetcher change.** `_resolve_tree` now recurses into subdirectories, so `arch/x86/x86_64/`
+  and `arch/x86/i386/` are included (`mm.rst`, `5level-paging.rst`, `fsgs.rst`, `IO-APIC.rst`).
+  Filenames are stored relative to the source path (`x86_64/mm.rst`) so nested files keep
+  their layout and cannot collide. No-op for the flat `arch/arm64` directory.
+
+- **Corpus after:** 5 sources, ~76 files, ~7.6 MB, 1,136 PDF pages (RST has no page count, so
+  `PAGE_CEILING` is unaffected). Structural types unchanged at 3 — x86 is `kernel_doc`, the
+  same type as arm64.
+
+- **Known noise, deferred to M2.** The fetch pulls a few near-empty stubs (`features.rst` 67 B,
+  `ifs.rst` 89 B, per-directory `index.rst`). Consistent with the existing arm64 set; a
+  minimum-size filter is an M2 chunking concern, not an ingestion one.
+
 ---
 
 ## 4. Open questions
@@ -646,3 +696,4 @@ preserved intact under D-020.
 | 2026-07-30 | D-014, D-015, D-016 created; D-014a, D-014b superseded |
 | 2026-07-30 | D-013, D-017, D-018 created; D-013b superseded |
 | 2026-07-30 | D-019 … D-028 created; D-019a superseded; D-027 made moot (plan v4) |
+| 2026-09-02 | D-029 created — x86 kernel docs added; kernel-doc licence relabelled `GPL-2.0-only` |

@@ -208,6 +208,63 @@ def test_arxiv_source_would_also_fail_the_licence_gate(tmp_path: Path) -> None:
         assert_redistributable(A.licence, licence_url=A.licence_url)
 
 
+# --------------------------------------------------------------------------- GITHUB_TREE
+
+
+def _tree_source() -> Source:
+    return Source(
+        id="kernel-docs",
+        title="Kernel docs",
+        doc_type=DocType.KERNEL_DOC,
+        fetch_kind=FetchKind.GITHUB_TREE,
+        licence="GPL-2.0-only",
+        publisher="Linux kernel community",
+        url="https://github.com/torvalds/linux/tree/master/Documentation/arch/x86",
+        repo="torvalds/linux",
+        path="Documentation/arch/x86",
+        suffixes=(".rst", ".txt"),
+        ref="v7.2",
+    )
+
+
+def test_resolve_tree_recurses_into_subdirectories() -> None:
+    """`Documentation/arch/x86` keeps its best pages (mm.rst, 5level-paging.rst) in x86_64/.
+
+    A non-recursive listing would silently drop them and still write a complete-looking
+    manifest — the failure mode a corpus cannot afford.
+    """
+    top = httpx.Response(
+        200,
+        json=[
+            {"type": "file", "name": "boot.rst", "download_url": "https://x/boot.rst"},
+            {"type": "file", "name": "resume.svg", "download_url": "https://x/resume.svg"},
+            {"type": "dir", "name": "x86_64", "path": "Documentation/arch/x86/x86_64"},
+        ],
+    )
+    subdir = httpx.Response(
+        200,
+        json=[
+            {"type": "file", "name": "mm.rst", "download_url": "https://x/x86_64/mm.rst"},
+        ],
+    )
+
+    with client_returning(top, subdir) as c:
+        out = fetch_mod._resolve_tree(c, _tree_source())
+
+    assert out == [
+        ("boot.rst", "https://x/boot.rst"),
+        ("x86_64/mm.rst", "https://x/x86_64/mm.rst"),
+    ]  # .svg filtered by suffixes; nested file keeps its relative path
+
+
+def test_resolve_tree_errors_when_nothing_matches() -> None:
+    empty = httpx.Response(
+        200, json=[{"type": "file", "name": "Makefile", "download_url": "https://x/Makefile"}]
+    )
+    with client_returning(empty) as c, pytest.raises(FetchError, match="no files matching"):
+        fetch_mod._resolve_tree(c, _tree_source())
+
+
 # --------------------------------------------------------------------------- page counting
 
 

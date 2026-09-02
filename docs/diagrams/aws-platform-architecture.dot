@@ -1,0 +1,106 @@
+// SpecSage — AWS platform architecture (state at M1)
+// Render: dot -Tpng -Gdpi=150 docs/diagrams/aws-platform-architecture.dot -o docs/diagrams/aws-platform-architecture.png
+digraph SpecSagePlatform {
+  rankdir=TB;
+  compound=true;
+  fontname="Helvetica"; fontsize=14; labelloc="t";
+  label=<<b>SpecSage — AWS platform architecture</b><br/><font point-size="10">account 941500193593 · us-east-1 · state at milestone M1&nbsp;&nbsp;(grey dashed = planned, M3–M9)</font><br/> >;
+  nodesep=0.34; ranksep=0.62;
+  node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#ffffff", color="#7d8590", penwidth=1.1, margin="0.13,0.09"];
+  edge [fontname="Helvetica", fontsize=8.5, color="#57606a"];
+
+  // palette: compute #ED7100 · storage #3F8624 · network #8C4FFF · security #C7263E · edge #232F3E
+
+  // ============================================ row 1 — outside AWS
+  subgraph cluster_ext {
+    label="outside AWS"; style="rounded,dashed"; color="#b0b6bd"; fontsize=10;
+    actor [label="Browser  ·  Claude MCP client (M8)", fillcolor="#f6f8fa", color="#57606a"];
+    net   [label="Upstream doc sources\nGitHub Releases · raw.githubusercontent · datasheets.raspberrypi", fillcolor="#f6f8fa", color="#57606a"];
+    dev   [label="Developer laptop\nmake up · make ingest · make down", fillcolor="#f6f8fa", color="#57606a"];
+    gha   [label="GitHub Actions\nci.yml · deploy.yml", fillcolor="#f6f8fa", color="#57606a"];
+  }
+
+  // ============================================ row 2 — data layer (edge + durable)
+  subgraph cluster_data {
+    label="data layer   ·   never destroyed   ·   owns the public URL and every durable artifact";
+    style="rounded,filled"; fillcolor="#eef3fb"; color="#232F3E"; fontsize=10;
+    cf   [label="CloudFront — E38H2SZ7YVFENH\nd3dxlxj4unjdgm.cloudfront.net", color="#232F3E", penwidth=1.7];
+    web  [label="S3 — specsage-web\npaused.html · served via OAC", color="#3F8624"];
+    ecr  [label="ECR — specsage-api:<git-sha>\none image, two entrypoints", color="#ED7100"];
+    art  [label="S3 — specsage-artifacts\nraw/<source>/<file>  +  raw/manifest.yaml", color="#3F8624", penwidth=1.7];
+  }
+
+  // ============================================ row 3 — compute layer
+  subgraph cluster_compute {
+    label="compute layer   ·   destroyed between sessions   ·   make up / make down";
+    style="rounded,filled"; fillcolor="#fdf1e7"; color="#ED7100"; fontsize=10;
+
+    subgraph cluster_vpc {
+      label="VPC 10.20.0.0/16   ·   2 public subnets   ·   Internet Gateway, no NAT";
+      style="rounded,filled"; fillcolor="#ffffff"; color="#8C4FFF"; fontsize=9;
+      lambda  [label="Lambda — specsage-api\nFastAPI /health · container image + Lambda Web Adapter\nFunction URL, auth NONE", color="#ED7100", penwidth=1.7];
+      fargate [label="ECS Fargate task — specsage-ingestion\npython -m ingestion · 0.5 vCPU / 1 GB · ARM64\nsecurity group: no inbound rules", color="#ED7100", penwidth=1.7];
+      ecsc    [label="ECS cluster — specsage\n(namespace, $0)", color="#ED7100"];
+    }
+    eb   [label="EventBridge rule\nspecsage-ingestion · rate(7 days) · DISABLED", color="#ED7100"];
+    logs [label="CloudWatch Logs\n/aws/lambda/specsage-api\n/ecs/specsage-ingestion", color="#ED7100"];
+    iamc [label="IAM roles (compute)\nlambda-exec · task-execution\ningestion-task → S3 raw/* only\nevents-invoke-ecs → scoped iam:PassRole", color="#C7263E"];
+  }
+
+  // ============================================ row 4 — bootstrap layer
+  subgraph cluster_bootstrap {
+    label="bootstrap layer   ·   applied once, by hand   ·   never destroyed";
+    style="rounded,filled"; fillcolor="#f2eefb"; color="#8C4FFF"; fontsize=10;
+    tfstate [label="S3 — specsage-tfstate\nTerraform state · versioned · S3-native lock", color="#3F8624"];
+    oidc    [label="IAM — GitHub OIDC provider", color="#C7263E"];
+    ciroles [label="IAM roles\nspecsage-gha-plan · specsage-gha-deploy", color="#C7263E"];
+    budget  [label="AWS Budgets\nmonthly alarm → email", color="#ED7100"];
+  }
+
+  // ============================================ planned (side)
+  subgraph cluster_future {
+    label="planned  ·  M3–M9"; style="rounded,dashed"; color="#98a0a8"; fontsize=10;
+    node [style="rounded,dashed", color="#98a0a8", fontcolor="#57606a"];
+    sfn     [label="Step Functions\npipeline orchestration"];
+    bedrock [label="Amazon Bedrock\nTitan embeddings · Claude Sonnet 4.6 / Haiku 4.5"];
+    qdrant  [label="Qdrant Cloud\nvector store"];
+    neo4j   [label="Neo4j AuraDB\nreference graph"];
+  }
+
+  // -------- request path (solid, dark) --------
+  actor  -> cf     [label="HTTPS", penwidth=1.7, color="#232F3E"];
+  cf     -> web    [label="default behaviour / origin fallback", style=dashed];
+  cf     -> lambda [label="origin once attached\n(make up sets lambda_function_url)", lhead=cluster_vpc, penwidth=1.7, color="#232F3E"];
+
+  // -------- batch / ingestion path --------
+  net     -> fargate [label="HTTPS egress via IGW", color="#C7263E"];
+  eb      -> fargate [label="RunTask", style=dashed];
+  dev     -> fargate [label="make ingest → RunTask", style=dashed];
+  fargate -> art     [label="PutObject raw/*  (role: ingestion-task)", penwidth=1.7, color="#3F8624"];
+
+  // -------- shared plumbing --------
+  lambda  -> ecr  [label="image pull (role: task-execution)", style=dotted];
+  fargate -> ecr  [style=dotted];
+  lambda  -> logs [style=dotted];
+  fargate -> logs [style=dotted];
+
+  // -------- control plane --------
+  dev     -> tfstate [label="terraform apply\nAWS_PROFILE=specsage", style=dashed, color="#8C4FFF"];
+  gha     -> oidc    [label="OIDC token", color="#C7263E"];
+  oidc    -> ciroles [label="AssumeRole (no static keys)", color="#C7263E"];
+  ciroles -> ecr     [label="build + push", style=dashed, color="#8C4FFF"];
+  ciroles -> tfstate [label="plan / apply", style=dashed, color="#8C4FFF"];
+  budget  -> dev     [label="cost alert", style=dotted];
+
+  // -------- planned edges (faint, do not influence ranking) --------
+  lambda  -> qdrant  [style="dashed", color="#98a0a8", constraint=false];
+  lambda  -> neo4j   [style="dashed", color="#98a0a8", constraint=false];
+  lambda  -> bedrock [label="retrieve + synthesise (M6+)", style="dashed", color="#98a0a8", constraint=false];
+  sfn     -> fargate [label="parse · embed · graph (M2–M4)", style="dashed", color="#98a0a8", constraint=false];
+
+  // -------- invisible spine: forces the four layers into stacked rows --------
+  actor  -> cf     [style=invis, weight=100];
+  cf     -> lambda [style=invis, weight=100];
+  lambda -> tfstate [style=invis, weight=100];
+  tfstate -> sfn   [style=invis, weight=100];
+}

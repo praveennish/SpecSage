@@ -13,10 +13,16 @@ yet built).
 ## 1. What SpecSage is
 
 An agentic RAG + knowledge-graph system over openly-licensed computer-architecture
-documentation (RISC-V ISA specs, OpenTitan, Zephyr, Devicetree, Linux kernel arm64 docs, open
-SoC datasheets, arXiv papers). It answers questions with verifiable citations, traces
-cross-references that pure vector search cannot follow, and exposes itself as an MCP server so
-any Claude client can query it directly.
+documentation. It answers questions with verifiable citations, traces cross-references that
+pure vector search cannot follow, and exposes itself as an MCP server so any Claude client can
+query it directly.
+
+Corpus as of M1 (5 sources, ~76 files — see `docs/PROVENANCE.md`): the RISC-V ISA manual
+(the only full ISA spec — CC-BY), the Devicetree spec (BSD), the Linux kernel `arch/arm64`
+and `arch/x86` docs (GPL-2.0 — systems-level, *not* ISA specs; there is no open x86/ARM ISA
+spec), and the BCM2711 SoC datasheet. So SpecSage covers **RISC** at full-ISA depth (RISC-V)
+plus kernel level (ARM64), and **CISC** (x86-64) at kernel level only. arXiv papers are a
+deferred fourth structural type ([D-029](./DECISION-LOG.md), and the note in `sources.py`).
 
 The differentiating pieces are the **evaluation harness** (M7) and the **teacher/student
 cascade** (M9) — a distilled open-weight model serving the cheap path with automatic fallback
