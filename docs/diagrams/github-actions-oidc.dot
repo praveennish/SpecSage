@@ -1,0 +1,51 @@
+// SpecSage — GitHub Actions ⇄ AWS via OIDC federation
+// Render: dot -Tpng -Gdpi=150 docs/diagrams/github-actions-oidc.dot -o docs/diagrams/github-actions-oidc.png
+digraph OIDC {
+  rankdir=TB;
+  compound=true;
+  fontname="Helvetica"; fontsize=13; labelloc="t";
+  label=<<b>GitHub Actions → AWS via OIDC federation</b><br/><font point-size="10">no stored AWS keys · credentials expire in 1 h · every token bound to repo + branch/PR + environment&nbsp;&nbsp;(P-08, D-009)</font><br/> >;
+  nodesep=0.40; ranksep=0.6;
+  node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#ffffff", color="#7d8590", penwidth=1.1, margin="0.14,0.09"];
+  edge [fontname="Helvetica", fontsize=9, color="#57606a"];
+
+  // ============================ GitHub side ============================
+  subgraph cluster_gh {
+    label="GitHub"; style="rounded,filled"; fillcolor="#f2f4f6"; color="#57606a"; fontsize=11;
+    env  [label="GitHub Environment  “dev”\nprotection rules / required reviewer —\nan  :environment:dev  token is minted only after these pass", fillcolor="#fff2cc", color="#ED7100"];
+    job  [label="Workflow job\nci.yml → terraform plan     ·     deploy.yml → build + apply\ndeclares  permissions: id-token: write", fillcolor="#eef3fb", color="#232F3E", penwidth=1.6];
+    idp  [label="GitHub OIDC provider\nhttps://token.actions.githubusercontent.com\npublishes signing keys at  /.well-known/jwks", fillcolor="#eef3fb", color="#232F3E"];
+  }
+
+  jwt [label="Signed JWT — the OIDC ID token\naud = sts.amazonaws.com\nsub = repo:praveennish/SpecSage:<context>\n<context> ∈ { pull_request, ref:refs/heads/main, environment:dev }\nalso carries: repository, ref, sha, run_id, actor", shape=note, fillcolor="#fffbe6", color="#b8860b"];
+
+  // ============================ AWS side ============================
+  subgraph cluster_aws {
+    label="AWS  ·  account 941500193593  ·  us-east-1"; style="rounded,filled"; fillcolor="#fdf1e7"; color="#ED7100"; fontsize=11;
+
+    sts [label="AWS STS  ·  AssumeRoleWithWebIdentity", color="#ED7100", penwidth=1.6];
+
+    provider [label="IAM — OIDC identity provider (registered once, bootstrap layer)\nurl = token.actions.githubusercontent.com   ·   client_id_list = [ sts.amazonaws.com ]", color="#C7263E"];
+
+    subgraph cluster_roles {
+      label="IAM roles — least privilege lives in the trust policy's  sub  condition"; style="rounded,filled"; fillcolor="#ffffff"; color="#C7263E"; fontsize=10;
+      plan   [label="specsage-gha-plan\ntrusts  sub = …:pull_request   OR   …:ref:refs/heads/main\ncan: ReadOnlyAccess  +  read/write the S3 state lock file\ncannot: mutate any infrastructure", color="#C7263E"];
+      deploy [label="specsage-gha-deploy\ntrusts  sub = …:environment:dev   ONLY   → gate enforced by IAM, not YAML\ncan: scoped infra (s3/ecr/lambda/cloudfront/ecs/ec2/events/…)  +  IAM on  role/specsage-*\ncannot: touch its own role or the plan role (explicit Deny)", color="#C7263E", penwidth=1.6];
+    }
+
+    creds [label="Temporary credentials\nAWS_ACCESS_KEY_ID + SECRET + SESSION_TOKEN\nvalid ≤ 3600 s   ·   a leaked CI log is worthless once expired", shape=note, fillcolor="#e2efda", color="#3F8624"];
+    api   [label="AWS APIs\nS3 (Terraform state)  ·  ECR (image push)  ·  Lambda · CloudFront · ECS · VPC · EventBridge · …", color="#3F8624"];
+  }
+
+  // ============================ the exchange ============================
+  env  -> job      [label="  0  gate passed", style=dashed, color="#ED7100"];
+  job  -> idp      [label="  1  request token  (audience = sts.amazonaws.com)"];
+  idp  -> jwt      [label="  2  mint + sign", color="#b8860b"];
+  jwt  -> sts      [label="  3  AssumeRoleWithWebIdentity( RoleArn, JWT )", penwidth=1.6, color="#232F3E"];
+  sts  -> idp      [label="  4  fetch JWKS, verify signature", style=dotted, constraint=false];
+  sts  -> provider [label="  5  aud registered?", style=dotted];
+  sts  -> plan     [label="  6  does  sub  match the role's trust condition?", style=dotted, lhead=cluster_roles];
+  plan   -> creds  [label="  7  issue", color="#3F8624"];
+  deploy -> creds  [color="#3F8624"];
+  creds  -> api    [label="  8  terraform plan / apply · docker push", penwidth=1.6, color="#3F8624"];
+}
