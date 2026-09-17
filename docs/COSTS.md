@@ -3,7 +3,8 @@
 Estimated vs actual. Updated whenever infrastructure changes. Reasoning behind each
 cost-shaping choice is in [DECISION-LOG.md](./DECISION-LOG.md).
 
-**Status:** nothing provisioned yet. All figures are estimates.
+**Status:** `bootstrap` + `data` layers live since M0; `compute` + M1 ingestion live as of
+2026-09-17 (see §5 for real numbers). Figures beyond M1 remain estimates.
 
 ---
 
@@ -104,18 +105,25 @@ an order of magnitude. M12's cost work becomes verification rather than optimisa
 | Month | Estimated | Actual | Delta | Notes |
 |---|---|---|---|---|
 | 2026-08 | ~$1.30 | TBD | — | `bootstrap` + `data` applied 2026-08-07. Account has pre-existing non-SpecSage spend (two prior budgets), so filter on `Project=SpecSage` once the tag activates. |
+| 2026-09 | ~$1.30 idle, ~$1.31 with `compute` up | TBD | — | M1 ingestion run 2026-09-17: real corpus landed in S3 (below). `compute` currently up (Lambda + Fargate task def) for the x86 deploy — see [D-029](./DECISION-LOG.md#d-029). |
 
-### Deployed so far
+### Deployed so far (real numbers, checked against AWS 2026-09-17)
 
-| Resource | Billing model | Est. $/mo |
-|---|---|---|
-| S3 state bucket | per GB — a few KB | ~$0.01 |
-| S3 artifacts bucket | per GB — empty until M1 | $0.00 |
-| S3 web bucket | one 2 KB object | ~$0.01 |
-| ECR repository | per GB — empty until first push | $0.00 |
-| CloudFront distribution | per request/GB, **no hourly charge** | $0.00 (free tier) |
-| OIDC provider, 2 IAM roles, budget | free | $0.00 |
-| **Total live** | | **~$0.02/mo** |
+| Resource | Billing model | Actual size | Est. $/mo |
+|---|---|---|---|
+| S3 state bucket | per GB | 200 KB, 4 objects | ~$0.01 |
+| S3 artifacts bucket — `raw/` corpus | per GB | **7.97 MB, 77 objects** (5 sources, 1,136 PDF pages) | ~$0.0002 → rounds to $0.00 |
+| S3 web bucket | one object | 2 KB (`paused.html`) | ~$0.01 |
+| ECR repository | per GB | 6 images (lifecycle policy caps at 10) | ~$0.10 |
+| CloudFront distribution | per request/GB, **no hourly charge** | serving live | $0.00 (free tier) |
+| OIDC provider, 2 IAM roles, budget alarm | free | — | $0.00 |
+| **Total, `compute` down** | | | **~$1.30/mo** (matches the v4 idle estimate, §2) |
+| Fargate ingestion task | per second while running | ~15 s per run, ran once | ~$0.0001/run — negligible |
+
+The M1 plan's cost table (~$0.15/mo + $0.01/run) holds: the corpus at 7.97 MB is well under the
+"a few GB" assumed in the persistent-layer estimate, and the ingestion task is a rounding error
+against the $1.30/mo idle baseline. Re-check once M3 (embeddings) and M4 (graph) push real spend
+onto Bedrock.
 
 The interesting number is CloudFront: a public HTTPS endpoint with a valid certificate,
 costing nothing while idle. That is the whole reason no domain and no load balancer exist
